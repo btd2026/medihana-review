@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MediHana — Review Package for Prof. Pinker</title>
+<style>
+  body { font-family: Georgia, 'Times New Roman', serif; margin: 0; background: #faf7f2; color: #2b2118; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-size: 30px; margin-bottom: 4px; }
+  h2 { font-size: 21px; margin-top: 36px; border-bottom: 2px solid #4B160D; padding-bottom: 4px; color: #4B160D; }
+  .sub { color: #6b5a4a; margin-top: 0; }
+  .card { background: #fff; border: 1px solid #e3d7c8; border-radius: 8px; padding: 14px 18px; margin: 12px 0; }
+  code, pre { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 13.5px; }
+  pre { background: #2b2118; color: #ffe9d0; padding: 14px 16px; border-radius: 8px; overflow-x: auto; }
+  a { color: #8a4b08; }
+  li { margin: 6px 0; }
+  .tag { display: inline-block; background: #4B160D; color: #ffe9d0; border-radius: 4px; padding: 1px 8px; font-size: 12.5px; font-family: Menlo, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <h1>MediHana — Review Package</h1>
+  <p class="sub">Prepared by Brian Di Bassinga for Prof. Edieal Pinker · Nov 1–2, 2026<br>
+  Findings, exact formulas, and proposed fixes from the meeting notes. <strong>Nothing has been applied to the MediHana project</strong> — everything is a proposal awaiting approval.</p>
+
+  <h2>Start here</h2>
+  <div class="card"><strong><a href="https://github.com/btd2026/medihana-review/blob/main/APPROVAL-BATCH.md">Approval Batch</a></strong> — the master list: per item, the finding, the evidence (file + line), the proposed fix, and the risk. Written for yes/no decisions.</div>
+  <div class="card"><strong><a href="https://github.com/btd2026/medihana-review/blob/main/FORMULAS-AND-PARAMETERS.md">Formulas &amp; Parameters</a></strong> — where the utilization and NPS numbers actually come from, traced through the code.</div>
+  <div class="card"><strong><a href="https://github.com/btd2026/medihana-review">Repository</a></strong> — all documents plus one patch per proposed fix in <code>diffs/</code>.</div>
+
+  <h2>Headline findings</h2>
+  <ul>
+    <li><span class="tag">T1</span> <strong>Projected Staff Utilization</strong> is a live projection in Clinic Controls — expected patients × work per patient ÷ staff capacity. Not a simulation result.</li>
+    <li><span class="tag">T2</span> <strong>Net Promoter Score</strong> is synthetic — it starts at 100 and subtracts penalties, including for MD busy %, which patients never feel directly. A real calculation is proposed below.</li>
+    <li><span class="tag">T6</span> <strong>Roles:</strong> only two exist — student and full admin. There is no instructor role; a teacher today would need full admin, including deleting users and games.</li>
+    <li><span class="tag">T3</span> <strong>Task-allocation sliders</strong> have no MD floor, and rebalancing can trade against the MD. Fix prepared; the floor will be admin-settable (default 20).</li>
+    <li><span class="tag">T4</span> <strong>Batch length</strong> (120 days) is hardcoded, inputs disabled. Fix prepared: admin-editable, default 120.</li>
+    <li><span class="tag">T5</span> <strong>Fixed Cost</strong> doesn't exist in Financial Parameters. Fix prepared: per-day fixed cost in both profit calculations.</li>
+    <li><span class="tag">T0</span> <strong>Test suite</strong> didn't compile. Fix prepared (tests only) — now 11/11 passing, build clean.</li>
+  </ul>
+
+  <h2>A real Net Promoter Score — the proposal</h2>
+  <p>Score every simulated patient 0–10 from their own experience, classify with the standard bands, and take promoters minus detractors — the actual NPS definition, using per-patient delay data the simulation already records. Full reasoning: <a href="https://github.com/btd2026/medihana-review/blob/main/NPS-PROPOSAL.md">NPS-PROPOSAL.md</a>.</p>
+  <pre>delay_p = delayPre + delayExam + delayPost   (all three stages)
+score_p = max(0, 10 − delay_p / 10)           (10 min of waiting = 1 point)
+abandoned patients score 0 · no-shows excluded
+
+Promoter ≥ 9 · Passive 7–8 · Detractor ≤ 6
+
+NPS = 100 × (Promoters − Detractors) / everyone who sought care</pre>
+  <p>The MD busy-% penalties come out — patients recommend based on their wait and whether they were seen, and the MD effect already reaches them through delay.</p>
+
+  <h2>Questions for Prof. Pinker</h2>
+  <ul>
+    <li>Is a read-only / results-only <strong>instructor role</strong> wanted, instead of full admin for teachers?</li>
+    <li>Level 2 is never assigned or defined anywhere — was it meant as an intermediate (instructor?) tier?</li>
+    <li>For the real NPS: should appointment access delay (days to get an appointment) also cost points, and should the 10-min-per-point slope be admin-configurable?</li>
+    <li>For Fixed Cost: per-day as prepared, or a one-off cost spread over days open?</li>
+  </ul>
+</main>
+</body>
+</html>
