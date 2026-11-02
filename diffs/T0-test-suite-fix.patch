@@ -1,0 +1,208 @@
+diff --git a/src/app/admin/admin.component.spec.ts b/src/app/admin/admin.component.spec.ts
+index 617b55b..54752b5 100644
+--- a/src/app/admin/admin.component.spec.ts
++++ b/src/app/admin/admin.component.spec.ts
+@@ -1,4 +1,7 @@
+ import { ComponentFixture, TestBed } from '@angular/core/testing';
++import { provideHttpClient } from '@angular/common/http';
++import { provideRouter } from '@angular/router';
++import { MatDialog } from '@angular/material/dialog';
+ 
+ import { AdminComponent } from './admin.component';
+ 
+@@ -6,9 +9,17 @@ describe('AdminComponent', () => {
+   let component: AdminComponent;
+   let fixture: ComponentFixture<AdminComponent>;
+ 
++  // The component's template uses routerLink (needs router providers) and
++  // its services need HttpClient; UtilsService needs a MatDialog. Providing
++  // the real router/http plumbing plus a dialog stub lets it construct.
+   beforeEach(async () => {
+     await TestBed.configureTestingModule({
+-      imports: [AdminComponent]
++      imports: [AdminComponent],
++      providers: [
++        provideHttpClient(),
++        provideRouter([]),
++        { provide: MatDialog, useValue: {} },
++      ],
+     })
+     .compileComponents();
+ 
+diff --git a/src/app/app.spec.ts b/src/app/app.spec.ts
+index ebc86ca..c494891 100644
+--- a/src/app/app.spec.ts
++++ b/src/app/app.spec.ts
+@@ -14,10 +14,13 @@ describe('App', () => {
+     expect(app).toBeTruthy();
+   });
+ 
+-  it('should render title', async () => {
++  // The root template is a bare <router-outlet /> shell — the old scaffold
++  // test asserting an <h1> "Hello, medi-hana" title no longer matches the
++  // app, so this asserts the shell actually renders the outlet instead.
++  it('should render the router outlet shell', async () => {
+     const fixture = TestBed.createComponent(App);
+     await fixture.whenStable();
+     const compiled = fixture.nativeElement as HTMLElement;
+-    expect(compiled.querySelector('h1')?.textContent).toContain('Hello, medi-hana');
++    expect(compiled.querySelector('router-outlet')).not.toBeNull();
+   });
+ });
+diff --git a/src/app/auth/admin.guard.spec.ts b/src/app/auth/admin.guard.spec.ts
+index e982f62..7ef37c4 100644
+--- a/src/app/auth/admin.guard.spec.ts
++++ b/src/app/auth/admin.guard.spec.ts
+@@ -1,16 +1,41 @@
+ import { TestBed } from '@angular/core/testing';
++import { Router, UrlTree } from '@angular/router';
+ 
+ import { AdminGuard } from './admin.guard';
++import { AuthService } from './auth.service';
++import { User } from './user';
+ 
+ describe('AdminGuard', () => {
+-  let guard: AdminGuard;
++  // AdminGuard is a functional guard (a CanActivateFn), not an injectable
++  // class — the previous spec injected it as `AdminGuard` the class, which
++  // no longer compiles. It is exercised here via runInInjectionContext with
++  // a stubbed AuthService/Router, mirroring how the router invokes it.
++  const user: User = { lid: 0, uid: 0, name: '', email: '', pw: '', level: 1 };
++  const loginTree = { toString: () => '/' } as unknown as UrlTree;
+ 
+   beforeEach(() => {
+-    TestBed.configureTestingModule({});
+-    guard = TestBed.inject(AdminGuard);
++    user.level = 1;
++    TestBed.configureTestingModule({
++      providers: [
++        { provide: AuthService, useValue: { user } },
++        { provide: Router, useValue: { parseUrl: () => loginTree } },
++      ],
++    });
+   });
+ 
+   it('should be created', () => {
+-    expect(guard).toBeTruthy();
++    expect(AdminGuard).toBeTruthy();
++  });
++
++  it('allows users with level > 1', () => {
++    user.level = 3;
++    const result = TestBed.runInInjectionContext(() => AdminGuard());
++    expect(result).toBe(true);
++  });
++
++  it('redirects users with level <= 1 to the login page', () => {
++    user.level = 1;
++    const result = TestBed.runInInjectionContext(() => AdminGuard());
++    expect(result).toBe(loginTree);
+   });
+ });
+diff --git a/src/app/auth/login/login.component.spec.ts b/src/app/auth/login/login.component.spec.ts
+index d6d85a8..94f331e 100644
+--- a/src/app/auth/login/login.component.spec.ts
++++ b/src/app/auth/login/login.component.spec.ts
+@@ -1,4 +1,7 @@
+-import { async, ComponentFixture, TestBed } from '@angular/core/testing';
++import { ComponentFixture, TestBed } from '@angular/core/testing';
++import { provideHttpClient } from '@angular/common/http';
++import { provideRouter } from '@angular/router';
++import { MatDialog } from '@angular/material/dialog';
+ 
+ import { LoginComponent } from './login.component';
+ 
+@@ -6,14 +9,21 @@ describe('LoginComponent', () => {
+   let component: LoginComponent;
+   let fixture: ComponentFixture<LoginComponent>;
+ 
+-  beforeEach(async(() => {
+-    TestBed.configureTestingModule({
+-      declarations: [ LoginComponent ]
+-    })
+-    .compileComponents();
+-  }));
++  // LoginComponent is standalone, so it goes in `imports` (the old spec used
++  // `declarations` and the long-removed `async` helper from
++  // @angular/core/testing, which no longer exists). AuthService needs an
++  // HttpClient and UtilsService needs a MatDialog; both are stubbed/provided
++  // so the component can be constructed without a backend.
++  beforeEach(async () => {
++    await TestBed.configureTestingModule({
++      imports: [LoginComponent],
++      providers: [
++        provideHttpClient(),
++        provideRouter([]),
++        { provide: MatDialog, useValue: {} },
++      ],
++    }).compileComponents();
+ 
+-  beforeEach(() => {
+     fixture = TestBed.createComponent(LoginComponent);
+     component = fixture.componentInstance;
+     fixture.detectChanges();
+diff --git a/src/app/shared/confirm/confirm.component.spec.ts b/src/app/shared/confirm/confirm.component.spec.ts
+index eb385ba..aa9671d 100644
+--- a/src/app/shared/confirm/confirm.component.spec.ts
++++ b/src/app/shared/confirm/confirm.component.spec.ts
+@@ -1,4 +1,5 @@
+ import { ComponentFixture, TestBed } from '@angular/core/testing';
++import { MatDialogRef, MAT_DIALOG_DATA } from '@angular/material/dialog';
+ 
+ import { ConfirmComponent } from './confirm.component';
+ 
+@@ -6,14 +7,18 @@ describe('ConfirmComponent', () => {
+   let component: ConfirmComponent;
+   let fixture: ComponentFixture<ConfirmComponent>;
+ 
++  // ConfirmComponent is standalone (goes in `imports`, not `declarations`)
++  // and is normally created by MatDialog, so its dialog tokens are stubbed.
+   beforeEach(async () => {
+     await TestBed.configureTestingModule({
+-      declarations: [ ConfirmComponent ]
++      imports: [ConfirmComponent],
++      providers: [
++        { provide: MatDialogRef, useValue: { close: () => {} } },
++        { provide: MAT_DIALOG_DATA, useValue: {} },
++      ],
+     })
+     .compileComponents();
+-  });
+ 
+-  beforeEach(() => {
+     fixture = TestBed.createComponent(ConfirmComponent);
+     component = fixture.componentInstance;
+     fixture.detectChanges();
+diff --git a/src/app/shared/error-dialog/error-dialog.component.spec.ts b/src/app/shared/error-dialog/error-dialog.component.spec.ts
+index f104b5a..baa7e2a 100644
+--- a/src/app/shared/error-dialog/error-dialog.component.spec.ts
++++ b/src/app/shared/error-dialog/error-dialog.component.spec.ts
+@@ -1,4 +1,5 @@
+ import { ComponentFixture, TestBed } from '@angular/core/testing';
++import { MatDialogRef, MAT_DIALOG_DATA } from '@angular/material/dialog';
+ 
+ import { ErrorDialogComponent } from './error-dialog.component';
+ 
+@@ -6,14 +7,19 @@ describe('ErrorDialogComponent', () => {
+   let component: ErrorDialogComponent;
+   let fixture: ComponentFixture<ErrorDialogComponent>;
+ 
++  // ErrorDialogComponent is standalone (goes in `imports`, not
++  // `declarations`) and is normally created by MatDialog, so its dialog
++  // tokens are stubbed.
+   beforeEach(async () => {
+     await TestBed.configureTestingModule({
+-      declarations: [ ErrorDialogComponent ]
++      imports: [ErrorDialogComponent],
++      providers: [
++        { provide: MatDialogRef, useValue: { close: () => {} } },
++        { provide: MAT_DIALOG_DATA, useValue: { msg: '' } },
++      ],
+     })
+     .compileComponents();
+-  });
+ 
+-  beforeEach(() => {
+     fixture = TestBed.createComponent(ErrorDialogComponent);
+     component = fixture.componentInstance;
+     fixture.detectChanges();

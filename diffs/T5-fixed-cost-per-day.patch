@@ -1,0 +1,88 @@
+diff --git a/src/app/admin/components/strategy-config/strategy-config.component.ts b/src/app/admin/components/strategy-config/strategy-config.component.ts
+index cd0135f..a034cc1 100644
+--- a/src/app/admin/components/strategy-config/strategy-config.component.ts
++++ b/src/app/admin/components/strategy-config/strategy-config.component.ts
+@@ -113,6 +113,12 @@ import { GameSharedService } from '../../../shared/game-shared.service';
+                 <input type="number" formControlName="costOvertimePerHour" min="0" />
+               </div>
+             </div>
++            <div class="field-row" style="margin-top: 0.5rem;">
++              <div class="field-group">
++                <label>Fixed Cost / Day ($)</label>
++                <input type="number" formControlName="costFixedPerDay" min="0" />
++              </div>
++            </div>
+             @if(false) {
+               <div class="field-row" style="margin-top: 0.5rem;">
+                 <div class="field-group">
+@@ -373,6 +379,7 @@ export class StrategyConfigComponent implements OnInit, OnDestroy {
+       costAiAssistantPerDay: [fin.costAiAssistantPerDay, [Validators.required, Validators.min(0)]],
+       costOvertimePerHour: [fin.costOvertimePerHour, [Validators.required, Validators.min(0)]],
+       costPatientDelayPerDay: [fin.costPatientDelayPerDay, [Validators.required, Validators.min(0)]],
++      costFixedPerDay: [fin.costFixedPerDay ?? 0, [Validators.required, Validators.min(0)]],
+     });
+ 
+     const ops = this.gameSharedService.getDefaultOperationalParams();
+diff --git a/src/app/admin/models/simulation.models.ts b/src/app/admin/models/simulation.models.ts
+index 914f0da..2825c0f 100644
+--- a/src/app/admin/models/simulation.models.ts
++++ b/src/app/admin/models/simulation.models.ts
+@@ -286,6 +286,14 @@ export interface FinancialParameters {
+   costAiAssistantPerDay: number;
+   costOvertimePerHour: number;
+   costPatientDelayPerDay: number;
++  /**
++   * Fixed cost per day (T5): overhead that does not vary with staffing or
++   * patient volume (rent, licenses, base utilities…). Subtracted once per
++   * day in both profit calculations. Optional in stored configs — games
++   * saved before this field existed resolve it to the default (0) via
++   * GameSharedService.resolveFinancialParams.
++   */
++  costFixedPerDay: number;
+ }
+ 
+ export interface OperationalParameters {
+diff --git a/src/app/shared/game-shared.service.ts b/src/app/shared/game-shared.service.ts
+index ddc1bc5..354f530 100644
+--- a/src/app/shared/game-shared.service.ts
++++ b/src/app/shared/game-shared.service.ts
+@@ -17,6 +17,7 @@ export class GameSharedService {
+       costAiAssistantPerDay: 50,
+       costOvertimePerHour: 75,
+       costPatientDelayPerDay: 10,
++      costFixedPerDay: 0,
+     };
+   }
+ 
+diff --git a/src/app/simulation/services/simulation-runner.service.ts b/src/app/simulation/services/simulation-runner.service.ts
+index 7b1f889..347e476 100644
+--- a/src/app/simulation/services/simulation-runner.service.ts
++++ b/src/app/simulation/services/simulation-runner.service.ts
+@@ -762,7 +762,10 @@ export class SimulationRunnerService {
+         getCount('NURSE') * fin.costNursePerDay +
+         getCount('ADMIN') * fin.costAdminPerDay +
+         getCount('EXAM_ROOM') * fin.costExamRoomPerDay +
+-        (avgOvertimeMinutes / 60) * overtimePerHour;
++        (avgOvertimeMinutes / 60) * overtimePerHour +
++        // Fixed daily overhead (T5) — charged once per day regardless of
++        // staffing or volume; 0 for configs saved before the field existed.
++        (fin.costFixedPerDay ?? 0);
+ 
+       avgDailyProfit = dailyRevenue - dailyCosts;
+     }
+diff --git a/src/app/simulation/services/strategy.service.ts b/src/app/simulation/services/strategy.service.ts
+index 649d8da..0f4d9da 100644
+--- a/src/app/simulation/services/strategy.service.ts
++++ b/src/app/simulation/services/strategy.service.ts
+@@ -70,7 +70,10 @@ export class StrategyService {
+       getCount('MD') * financial.costMdPerDay +
+       getCount('NURSE') * financial.costNursePerDay +
+       getCount('ADMIN') * financial.costAdminPerDay +
+-      getCount('EXAM_ROOM') * financial.costExamRoomPerDay;
++      getCount('EXAM_ROOM') * financial.costExamRoomPerDay +
++      // Fixed daily overhead (T5), kept in sync with the runner's
++      // post-run profit calculation in simulation-runner.service.ts.
++      (financial.costFixedPerDay ?? 0);
+ 
+     const dailyProfit = Math.round(dailyRevenue - dailyCosts);
+ 

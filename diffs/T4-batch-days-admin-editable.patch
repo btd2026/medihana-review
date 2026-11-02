@@ -1,0 +1,123 @@
+diff --git a/src/app/admin/components/scheduling-config/scheduling-config.component.ts b/src/app/admin/components/scheduling-config/scheduling-config.component.ts
+index e28c8b0..5c50ec3 100644
+--- a/src/app/admin/components/scheduling-config/scheduling-config.component.ts
++++ b/src/app/admin/components/scheduling-config/scheduling-config.component.ts
+@@ -206,6 +206,27 @@ import { SchedulingConfig } from '../../models/simulation.models';
+               </div>
+             </div>
+           </section>
++          <!-- Batch Simulation -->
++          <section class="form-section">
++            <h2>Batch Simulation</h2>
++            <p class="section-hint">
++              How many days a batch run simulates. Applies to batch runs
++              started from Simulation Control and from the student simulation
++              screen.
++            </p>
++            <div class="field-row">
++              <div class="field-group">
++                <label for="batchDays">Batch Run Length (days)</label>
++                <input
++                  id="batchDays"
++                  type="number"
++                  formControlName="batchDays"
++                  min="1"
++                  max="1000"
++                  />
++              </div>
++            </div>
++          </section>
+           <!-- Validation Errors -->
+           @if (errors.length > 0) {
+             <div class="validation-errors">
+@@ -275,6 +296,7 @@ export class SchedulingConfigComponent implements OnInit, OnDestroy {
+       latestAppointmentStartTime: [config.latestAppointmentStartTime ?? ''],
+       arrivalPerturbEarlyMinutes: [config.arrivalPerturbEarlyMinutes ?? 5, [Validators.required, Validators.min(0), Validators.max(30)]],
+       arrivalPerturbLateMinutes: [config.arrivalPerturbLateMinutes ?? 10, [Validators.required, Validators.min(0), Validators.max(60)]],
++      batchDays: [config.batchDays ?? 120, [Validators.required, Validators.min(1), Validators.max(1000)]],
+     });
+   }
+ 
+diff --git a/src/app/admin/components/simulation-control/simulation-control.component.html b/src/app/admin/components/simulation-control/simulation-control.component.html
+index 1559051..07de1f0 100644
+--- a/src/app/admin/components/simulation-control/simulation-control.component.html
++++ b/src/app/admin/components/simulation-control/simulation-control.component.html
+@@ -75,7 +75,7 @@
+         <div class="run-params">
+             <div class="field-group">
+                 <label>Number of Days to Simulate</label>
+-                <input type="number" [(ngModel)]="batchSize" [disabled]="true" min="1" max="1000" />
++                <input type="number" [(ngModel)]="batchSize" min="1" max="1000" />
+             </div>
+         </div>
+         }
+diff --git a/src/app/admin/components/simulation-control/simulation-control.component.ts b/src/app/admin/components/simulation-control/simulation-control.component.ts
+index d40882a..c08ebf1 100644
+--- a/src/app/admin/components/simulation-control/simulation-control.component.ts
++++ b/src/app/admin/components/simulation-control/simulation-control.component.ts
+@@ -173,6 +173,9 @@ export class SimulationControlComponent implements OnInit, OnDestroy {
+       .subscribe({
+         next: (config) => {
+           this.schedConfig = config;
++          // Batch length comes from the game's scheduling config (T4);
++          // the input below still lets the admin override it for one run.
++          this.batchSize = config.batchDays ?? 120;
+           this.checkReady();
+           this.cdr.markForCheck();
+         },
+diff --git a/src/app/admin/models/simulation.models.ts b/src/app/admin/models/simulation.models.ts
+index 01cb6d3..914f0da 100644
+--- a/src/app/admin/models/simulation.models.ts
++++ b/src/app/admin/models/simulation.models.ts
+@@ -264,6 +264,13 @@ export interface SchedulingConfig {
+    * relative to their scheduled slot (triangular max). Default 10.
+    */
+   arrivalPerturbLateMinutes?: number;
++  /**
++   * Number of days in a batch simulation run (T4). Admin-editable in
++   * Scheduling Configuration; stored in the same per-game JSON config as
++   * the other scheduling fields, so no backend change is needed. Defaults
++   * to 120 (the previously hardcoded value) when not set.
++   */
++  batchDays?: number;
+ }
+ 
+ // ─── Layer 3: Strategy Models ────────────────────────────────────────────────
+diff --git a/src/app/admin/services/scheduling-config.service.ts b/src/app/admin/services/scheduling-config.service.ts
+index 63143a0..777bc47 100644
+--- a/src/app/admin/services/scheduling-config.service.ts
++++ b/src/app/admin/services/scheduling-config.service.ts
+@@ -46,6 +46,7 @@ export class SchedulingConfigService {
+       maxAppointmentDurationMinutes: 60,
+       arrivalPerturbEarlyMinutes: 5,
+       arrivalPerturbLateMinutes: 10,
++      batchDays: 120,
+     };
+   }
+ 
+diff --git a/src/app/shared/game-shared.service.ts b/src/app/shared/game-shared.service.ts
+index 4319607..ddc1bc5 100644
+--- a/src/app/shared/game-shared.service.ts
++++ b/src/app/shared/game-shared.service.ts
+@@ -33,6 +33,7 @@ export class GameSharedService {
+       maxAppointmentsPerDay: 40,
+       minAppointmentDurationMinutes: 10,
+       maxAppointmentDurationMinutes: 60,
++      batchDays: 120,
+     };
+   }
+ 
+diff --git a/src/app/simulation/components/simulation-viewer/simulation-viewer.component.ts b/src/app/simulation/components/simulation-viewer/simulation-viewer.component.ts
+index 053f487..905affb 100644
+--- a/src/app/simulation/components/simulation-viewer/simulation-viewer.component.ts
++++ b/src/app/simulation/components/simulation-viewer/simulation-viewer.component.ts
+@@ -49,6 +49,9 @@ export class SimulationViewerComponent implements OnInit, OnDestroy {
+       .pipe(takeUntil(this.destroy$))
+       .subscribe((s) => {
+         this.session = s;
++        // Batch length is set by the admin in the game's scheduling
++        // config (T4); 120 preserves the previous hardcoded behavior.
++        this.batchDays = s?.schedulingConfig?.batchDays ?? 120;
+         this.cdr.markForCheck();
+       });
+ 

@@ -1,0 +1,453 @@
+diff --git a/src/app/simulation/components/clinic-controls/clinic-controls.component.html b/src/app/simulation/components/clinic-controls/clinic-controls.component.html
+index 475257b..bd25cea 100644
+--- a/src/app/simulation/components/clinic-controls/clinic-controls.component.html
++++ b/src/app/simulation/components/clinic-controls/clinic-controls.component.html
+@@ -60,11 +60,11 @@
+                                 <span>{{ formatResource(dist.resourceType) }}</span>
+                                 <span class="alloc-value">{{ getAllocation(dist.taskType, dist.resourceType) }}%</span>
+                             </div>
+-                            <input type="range" [min]="0" [max]="maxAllocationFor(dist.taskType, dist.resourceType)"
++                            <input type="range" [min]="minAllocationFor(dist.taskType, dist.resourceType)" [max]="maxAllocationFor(dist.taskType, dist.resourceType)"
+                                 [value]="getAllocation(dist.taskType, dist.resourceType)"
+                                 (input)="onAllocationChange(dist.taskType, dist.resourceType, $event)" />
+                             <div class="slider-range">
+-                                <span>0%</span>
++                                <span>{{ minAllocationFor(dist.taskType, dist.resourceType) }}%</span>
+                                 <span>{{ maxAllocationFor(dist.taskType, dist.resourceType) }}%</span>
+                             </div>
+                         </div>
+diff --git a/src/app/simulation/components/clinic-controls/clinic-controls.component.ts b/src/app/simulation/components/clinic-controls/clinic-controls.component.ts
+index 85c5283..57ad117 100644
+--- a/src/app/simulation/components/clinic-controls/clinic-controls.component.ts
++++ b/src/app/simulation/components/clinic-controls/clinic-controls.component.ts
+@@ -169,41 +169,146 @@ export class ClinicControlsComponent implements OnInit, OnDestroy {
+     return limit?.maxAllocationPercent ?? 100;
+   }
+ 
++  /**
++   * Protected MD share (T3, per Edi/Brian's rule): in any stage where the
++   * MD shares work with other staff, the MD keeps at least this percentage
++   * and the Nurse/Admin sliders trade only against each other inside the
++   * remaining pot (100 − MD). The MD receives whatever is left over.
++   * NOTE: 20 is the example value from the meeting notes — confirm the
++   * intended floor with Edi before shipping; it is a single constant.
++   */
++  readonly mdAllocationFloor = 20;
++
++  /** Slider minimum for a (task, resource) pair: the MD floor where it applies, else 0. */
++  minAllocationFor(taskType: TaskType, resourceType: ResourceType): number {
++    if (resourceType !== 'MD') return 0;
++    const rows = this.taskAllocations.filter((a) => a.taskType === taskType);
++    return rows.length > 1 ? this.mdAllocationFloor : 0;
++  }
++
+   onAllocationChange(
+     taskType: TaskType,
+     resourceType: ResourceType,
+     event: Event
+   ): void {
+     const value = Number((event.target as HTMLInputElement).value);
+-    const idx = this.taskAllocations.findIndex(
+-      (a) => a.taskType === taskType && a.resourceType === resourceType
+-    );
+-    if (idx >= 0) this.taskAllocations[idx].allocationPercent = value;
+-    let total = this.getAllocationTotal(taskType);
+-    if (total > 100) {
+-      let diff = total - 100;
+-      this.taskAllocations.forEach((t: TaskAllocationChoice) => {
+-        if (t.taskType === taskType && t.resourceType !== resourceType && total > 100 && t.allocationPercent > 0) {
+-          const adjustment = Math.min(diff, t.allocationPercent);
+-          t.allocationPercent -= adjustment;
+-          total -= adjustment;
+-        }
+-      })
+-    } else if (total < 100) {
+-      let diff = 100 - total;
+-      this.taskAllocations.forEach((t: TaskAllocationChoice) => {
+-        const maxAllocationPercent = this.maxAllocationFor(t.taskType, t.resourceType);
+-        if (t.taskType === taskType && t.resourceType !== resourceType && total < 100 && t.allocationPercent < maxAllocationPercent) {
+-          const adjustment = Math.min(diff, (maxAllocationPercent - t.allocationPercent));
+-          t.allocationPercent += adjustment;
+-          total += adjustment;
+-        }
+-      })
++    const rows = this.taskAllocations.filter((a) => a.taskType === taskType);
++    const changed = rows.find((a) => a.resourceType === resourceType);
++    if (!changed) return;
++    const md = rows.find((a) => a.resourceType === 'MD');
++    const cap = (a: TaskAllocationChoice) =>
++      this.maxAllocationFor(a.taskType, a.resourceType);
++
++    if (md && rows.length > 1) {
++      if (resourceType === 'MD') {
++        // MD slider: clamp into [floor, ceiling]; the Nurse/Admin pot
++        // (100 − MD) is re-split proportionally to its current shares.
++        changed.allocationPercent = Math.max(
++          this.mdAllocationFloor,
++          Math.min(value, cap(changed))
++        );
++        const pot = 100 - changed.allocationPercent;
++        const leftover = this.distributePot(
++          rows.filter((a) => a.resourceType !== 'MD'),
++          pot
++        );
++        // MD gets the leftover if the pot members are all at their ceilings.
++        if (leftover > 0) changed.allocationPercent += leftover;
++      } else {
++        // Nurse/Admin slider: trades only against the other non-MD role(s)
++        // inside the pot (100 − MD). MD's share is never touched.
++        const pot = 100 - md.allocationPercent;
++        changed.allocationPercent = Math.max(
++          0,
++          Math.min(value, cap(changed), pot)
++        );
++        const rest = pot - changed.allocationPercent;
++        const leftover = this.distributePot(
++          rows.filter(
++            (a) => a.resourceType !== 'MD' && a.resourceType !== resourceType
++          ),
++          rest
++        );
++        // Only reachable if the trading partner is ceiling-capped: the MD
++        // absorbs the remainder so the stage still totals 100.
++        if (leftover > 0) md.allocationPercent += leftover;
++      }
++    } else {
++      // Single-role stage (e.g. Dr. Solo): no pot to protect; clamp only.
++      changed.allocationPercent = Math.max(
++        0,
++        Math.min(value, cap(changed))
++      );
+     }
+     this.validate();
+     this.recomputeProjection();
+   }
+ 
++  /**
++   * Splits `pot` across `rows` proportionally to their current shares
++   * (equal shares if all are zero), respecting each row's ceiling and
++   * keeping whole percentages. Returns any undistributed remainder
++   * (non-zero only when every row is at its ceiling).
++   */
++  private distributePot(rows: TaskAllocationChoice[], pot: number): number {
++    if (rows.length === 0) return pot;
++    const caps = rows.map((a) =>
++      this.maxAllocationFor(a.taskType, a.resourceType)
++    );
++    const weights = rows.map((a) => Math.max(0, a.allocationPercent));
++    const totalWeight = weights.reduce((s, w) => s + w, 0);
++
++    // Exact proportional shares, iteratively capping at ceilings and
++    // re-splitting the excess among the rows still below their cap.
++    const exact = rows.map((_, i) =>
++      totalWeight > 0 ? (pot * weights[i]) / totalWeight : pot / rows.length
++    );
++    let remaining = pot;
++    let active = rows.map((_, i) => i);
++    while (active.length > 0) {
++      const activeWeight = active.reduce((s, i) => s + exact[i], 0);
++      const capped = active.filter(
++        (i) => activeWeight > 0 && (remaining * exact[i]) / activeWeight > caps[i]
++      );
++      if (capped.length === 0) {
++        for (const i of active) {
++          exact[i] = activeWeight > 0 ? (remaining * exact[i]) / activeWeight : remaining / active.length;
++        }
++        break;
++      }
++      for (const i of capped) {
++        exact[i] = caps[i];
++        remaining -= caps[i];
++      }
++      active = active.filter((i) => !capped.includes(i));
++    }
++
++    // Round to whole percentages; hand the rounding drift to the row with
++    // the largest share that is still below its ceiling.
++    const rounded = exact.map((v) => Math.round(v));
++    let drift = pot - rounded.reduce((s, v) => s + v, 0);
++    while (drift > 0) {
++      let best = -1;
++      for (let i = 0; i < rows.length; i++) {
++        if (rounded[i] < caps[i] && (best < 0 || rounded[i] > rounded[best])) best = i;
++      }
++      if (best < 0) break;
++      rounded[best]++;
++      drift--;
++    }
++    while (drift < 0) {
++      let best = -1;
++      for (let i = 0; i < rows.length; i++) {
++        if (rounded[i] > 0 && (best < 0 || rounded[i] > rounded[best])) best = i;
++      }
++      if (best < 0) break;
++      rounded[best]--;
++      drift++;
++    }
++    rows.forEach((a, i) => (a.allocationPercent = rounded[i]));
++    return drift > 0 ? drift : 0;
++  }
++
+   validate(): void {
+     this.errors = [];
+     for (const tt of this.taskTypes) {
+diff --git a/src/app/admin/components/resource-scenarios/resource-scenarios.component.html b/src/app/admin/components/resource-scenarios/resource-scenarios.component.html
+index de1ee35..f462522 100644
+--- a/src/app/admin/components/resource-scenarios/resource-scenarios.component.html
++++ b/src/app/admin/components/resource-scenarios/resource-scenarios.component.html
+@@ -82,18 +82,29 @@
+     <p class="section-hint">
+       Max % ceiling per task/resource pair, shared by every staffing model
+       below. A staffing model's own Default % (in its Work Matrix Rows
+-      table) can never exceed the ceiling set here.
++      table) can never exceed the ceiling set here. Min % on MD rows is
++      the protected MD floor: in a stage the MD shares with other staff,
++      students cannot drag the MD below it (Nurse/Admin trade only inside
++      the remaining pot). It defaults to 20 and applies only in shared
++      stages.
+     </p>
+     <div class="distribution-table">
+       <div class="limit-header">
+         <span>Task</span>
+         <span>Resource</span>
++        <span>Min %</span>
+         <span>Max %</span>
+       </div>
+       @for (limit of flowConfig.taskResourceLimits; track limit) {
+       <div class="limit-row">
+         <span>{{ formatTaskType(limit.taskType) }}</span>
+         <span>{{ formatResourceType(limit.resourceType) }}</span>
++        @if (isMdLimit(limit.resourceType)) {
++        <input type="number" [(ngModel)]="limit.minAllocationPercent" min="0" max="100"
++          (change)="markFlowConfigDirty()" />
++        } @else {
++        <span>—</span>
++        }
+         <input type="number" [(ngModel)]="limit.maxAllocationPercent" min="0" max="100"
+           (change)="markFlowConfigDirty()" />
+       </div>
+diff --git a/src/app/admin/components/resource-scenarios/resource-scenarios.component.scss b/src/app/admin/components/resource-scenarios/resource-scenarios.component.scss
+index f1aff8e..9908948 100644
+--- a/src/app/admin/components/resource-scenarios/resource-scenarios.component.scss
++++ b/src/app/admin/components/resource-scenarios/resource-scenarios.component.scss
+@@ -245,7 +245,7 @@
+ .limit-header,
+ .limit-row {
+   display: grid;
+-  grid-template-columns: 120px 120px 80px;
++  grid-template-columns: 120px 120px 80px 80px;
+   gap: 0.75rem;
+   align-items: center;
+   padding: 0.4rem 0;
+diff --git a/src/app/admin/components/resource-scenarios/resource-scenarios.component.ts b/src/app/admin/components/resource-scenarios/resource-scenarios.component.ts
+index 34f8e50..d515a88 100644
+--- a/src/app/admin/components/resource-scenarios/resource-scenarios.component.ts
++++ b/src/app/admin/components/resource-scenarios/resource-scenarios.component.ts
+@@ -199,6 +199,11 @@ export class ResourceScenariosComponent implements OnInit, OnDestroy {
+     this.flowConfigDirty = true;
+   }
+ 
++  /** Whether a Work Matrix Limits row carries the MD floor (Min %) — MD rows only. */
++  isMdLimit(resourceType: ResourceType): boolean {
++    return resourceType === ResourceType.MD;
++  }
++
+   saveFlowConfig(): void {
+     if (!this.flowConfig) return;
+     const errors = this.validateFlowConfig(this.flowConfig);
+@@ -249,6 +254,23 @@ export class ResourceScenariosComponent implements OnInit, OnDestroy {
+           )}: max % must be between 0 and 100.`
+         );
+       }
++      // Min % is the admin-set MD floor (T3); other resource types
++      // don't carry one yet.
++      if (limit.minAllocationPercent !== undefined) {
++        if (limit.minAllocationPercent < 0 || limit.minAllocationPercent > 100) {
++          errors.push(
++            `${this.formatTaskType(limit.taskType)}/${this.formatResourceType(
++              limit.resourceType
++            )}: min % must be between 0 and 100.`
++          );
++        } else if (limit.minAllocationPercent > limit.maxAllocationPercent) {
++          errors.push(
++            `${this.formatTaskType(limit.taskType)}/${this.formatResourceType(
++              limit.resourceType
++            )}: min % cannot exceed max %.`
++          );
++        }
++      }
+     }
+ 
+     return errors;
+diff --git a/src/app/admin/models/simulation.models.ts b/src/app/admin/models/simulation.models.ts
+index 2825c0f..a84615f 100644
+--- a/src/app/admin/models/simulation.models.ts
++++ b/src/app/admin/models/simulation.models.ts
+@@ -104,8 +104,27 @@ export interface TaskResourceLimit {
+   resourceType: ResourceType;
+   /** Max percentage of task allocatable to this resource (0-100) */
+   maxAllocationPercent: number;
++  /**
++   * Min percentage of task allocatable to this resource (0-100).
++   * Currently only meaningful for MD: it is the protected MD floor
++   * (T3) — in a stage the MD shares with other staff, students cannot
++   * drag the MD below it, and Nurse/Admin trade only inside the
++   * remaining pot. Admin-settable in Resource Scenarios → Work Matrix
++   * Limits (Brian's decision, Nov 1, 2026). Optional so flow configs
++   * saved before this field existed still load; consumers fall back
++   * to DEFAULT_MD_ALLOCATION_FLOOR for MD pairs.
++   */
++  minAllocationPercent?: number;
+ }
+ 
++/**
++ * Default protected MD allocation floor (%) used when a game's flow
++ * config has no admin-set min for an MD pair — the example value from
++ * Edi's meeting notes. Admins can change it per (task, MD) pair in
++ * Resource Scenarios → Work Matrix Limits.
++ */
++export const DEFAULT_MD_ALLOCATION_FLOOR = 20;
++
+ /**
+  * Which work-priority queue a task/resource entry feeds into.
+  *
+diff --git a/src/app/admin/services/resource-scenario.service.ts b/src/app/admin/services/resource-scenario.service.ts
+index 2380a7e..297a459 100644
+--- a/src/app/admin/services/resource-scenario.service.ts
++++ b/src/app/admin/services/resource-scenario.service.ts
+@@ -12,6 +12,7 @@ import {
+   PrecedenceConstraint,
+   TaskResourceDistribution,
+   TaskResourceLimit,
++  DEFAULT_MD_ALLOCATION_FLOOR,
+   FlowEngineSharedConfig,
+   SimulationEngineConfig,
+   SimulationMethod,
+@@ -226,7 +227,24 @@ export class ResourceScenarioService {
+       .get<ApiResponse<FlowEngineSharedConfig>>(
+         API_ENDPOINTS.FLOW_CONFIG(gameId)
+       )
+-      .pipe(map((r) => r.data));
++      .pipe(
++        map((r) => r.data),
++        // Backfill the MD floor (T3) for flow configs saved before the
++        // admin-settable min existed, so the admin UI shows the same
++        // default the student side falls back to instead of a blank.
++        map((config) => {
++          if (!config?.taskResourceLimits) return config;
++          for (const limit of config.taskResourceLimits) {
++            if (
++              limit.resourceType === ResourceType.MD &&
++              limit.minAllocationPercent === undefined
++            ) {
++              limit.minAllocationPercent = DEFAULT_MD_ALLOCATION_FLOOR;
++            }
++          }
++          return config;
++        })
++      );
+   }
+ 
+   updateFlowConfig(
+@@ -328,28 +346,28 @@ export class ResourceScenarioService {
+     switch (type) {
+       case ResourceScenarioType.DR_SOLO:
+         return [
+-          { taskType: TaskType.PRE_EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 100 },
+-          { taskType: TaskType.EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 100 },
+-          { taskType: TaskType.POST_EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 100 },
++          { taskType: TaskType.PRE_EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 100, minAllocationPercent: DEFAULT_MD_ALLOCATION_FLOOR },
++          { taskType: TaskType.EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 100, minAllocationPercent: DEFAULT_MD_ALLOCATION_FLOOR },
++          { taskType: TaskType.POST_EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 100, minAllocationPercent: DEFAULT_MD_ALLOCATION_FLOOR },
+         ];
+       case ResourceScenarioType.WITH_ADMIN:
+         return [
+           { taskType: TaskType.PRE_EXAM, resourceType: ResourceType.ADMIN, maxAllocationPercent: 80 },
+-          { taskType: TaskType.PRE_EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 80 },
+-          { taskType: TaskType.EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 100 },
++          { taskType: TaskType.PRE_EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 80, minAllocationPercent: DEFAULT_MD_ALLOCATION_FLOOR },
++          { taskType: TaskType.EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 100, minAllocationPercent: DEFAULT_MD_ALLOCATION_FLOOR },
+           { taskType: TaskType.POST_EXAM, resourceType: ResourceType.ADMIN, maxAllocationPercent: 80 },
+-          { taskType: TaskType.POST_EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 80 },
++          { taskType: TaskType.POST_EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 80, minAllocationPercent: DEFAULT_MD_ALLOCATION_FLOOR },
+         ];
+       case ResourceScenarioType.WITH_NURSE:
+         return [
+           { taskType: TaskType.PRE_EXAM, resourceType: ResourceType.ADMIN, maxAllocationPercent: 60 },
+           { taskType: TaskType.PRE_EXAM, resourceType: ResourceType.NURSE, maxAllocationPercent: 80 },
+-          { taskType: TaskType.PRE_EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 60 },
++          { taskType: TaskType.PRE_EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 60, minAllocationPercent: DEFAULT_MD_ALLOCATION_FLOOR },
+           { taskType: TaskType.EXAM, resourceType: ResourceType.NURSE, maxAllocationPercent: 50 },
+-          { taskType: TaskType.EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 100 },
++          { taskType: TaskType.EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 100, minAllocationPercent: DEFAULT_MD_ALLOCATION_FLOOR },
+           { taskType: TaskType.POST_EXAM, resourceType: ResourceType.ADMIN, maxAllocationPercent: 60 },
+           { taskType: TaskType.POST_EXAM, resourceType: ResourceType.NURSE, maxAllocationPercent: 80 },
+-          { taskType: TaskType.POST_EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 60 },
++          { taskType: TaskType.POST_EXAM, resourceType: ResourceType.MD, maxAllocationPercent: 60, minAllocationPercent: DEFAULT_MD_ALLOCATION_FLOOR },
+         ];
+     }
+   }
+diff --git a/src/app/simulation/components/clinic-controls/clinic-controls.component.ts b/src/app/simulation/components/clinic-controls/clinic-controls.component.ts
+index 57ad117..08bf474 100644
+--- a/src/app/simulation/components/clinic-controls/clinic-controls.component.ts
++++ b/src/app/simulation/components/clinic-controls/clinic-controls.component.ts
+@@ -20,6 +20,7 @@ import {
+   TriangularDistribution,
+   TaskType,
+   ResourceType,
++  DEFAULT_MD_ALLOCATION_FLOOR,
+   FinancialParameters,
+   OperationalParameters,
+ } from '../../../admin/models/simulation.models';
+@@ -171,19 +172,29 @@ export class ClinicControlsComponent implements OnInit, OnDestroy {
+ 
+   /**
+    * Protected MD share (T3, per Edi/Brian's rule): in any stage where the
+-   * MD shares work with other staff, the MD keeps at least this percentage
+-   * and the Nurse/Admin sliders trade only against each other inside the
++   * MD shares work with other staff, the MD keeps at least the floor and
++   * the Nurse/Admin sliders trade only against each other inside the
+    * remaining pot (100 − MD). The MD receives whatever is left over.
+-   * NOTE: 20 is the example value from the meeting notes — confirm the
+-   * intended floor with Edi before shipping; it is a single constant.
++   * The floor is ADMIN-SETTABLE (Brian's decision, Nov 1, 2026): it
++   * lives on the (task, MD) pair in session.flowConfig.taskResourceLimits
++   * as `minAllocationPercent`, edited in Resource Scenarios → Work
++   * Matrix Limits, and travels in the same opaque flow-config JSON as
++   * the Max % ceilings — no backend change. Flow configs saved before
++   * the field existed fall back to DEFAULT_MD_ALLOCATION_FLOOR (20,
++   * the example value from the meeting notes).
+    */
+-  readonly mdAllocationFloor = 20;
++  mdAllocationFloorFor(taskType: TaskType): number {
++    const limit = this.session?.flowConfig?.taskResourceLimits.find(
++      (l) => l.taskType === taskType && l.resourceType === ResourceType.MD
++    );
++    return limit?.minAllocationPercent ?? DEFAULT_MD_ALLOCATION_FLOOR;
++  }
+ 
+-  /** Slider minimum for a (task, resource) pair: the MD floor where it applies, else 0. */
++  /** Slider minimum for a (task, resource) pair: the configured MD floor where it applies, else 0. */
+   minAllocationFor(taskType: TaskType, resourceType: ResourceType): number {
+     if (resourceType !== 'MD') return 0;
+     const rows = this.taskAllocations.filter((a) => a.taskType === taskType);
+-    return rows.length > 1 ? this.mdAllocationFloor : 0;
++    return rows.length > 1 ? this.mdAllocationFloorFor(taskType) : 0;
+   }
+ 
+   onAllocationChange(
+@@ -201,10 +212,11 @@ export class ClinicControlsComponent implements OnInit, OnDestroy {
+ 
+     if (md && rows.length > 1) {
+       if (resourceType === 'MD') {
+-        // MD slider: clamp into [floor, ceiling]; the Nurse/Admin pot
+-        // (100 − MD) is re-split proportionally to its current shares.
++        // MD slider: clamp into [admin-set floor, ceiling]; the
++        // Nurse/Admin pot (100 − MD) is re-split proportionally to its
++        // current shares.
+         changed.allocationPercent = Math.max(
+-          this.mdAllocationFloor,
++          this.mdAllocationFloorFor(taskType),
+           Math.min(value, cap(changed))
+         );
+         const pot = 100 - changed.allocationPercent;
